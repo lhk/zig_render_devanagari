@@ -60,6 +60,10 @@
             .hash = "12202b816e7c31c516bd87218fd56f9b1f93671e4ab42a2a98110d586c4b3bdd2730",
             .lazy = true,
         },
+        .@"raylib-zig" = .{
+            .url = "https://github.com/Not-Nik/raylib-zig/archive/devel.tar.gz",
+            .hash = "12202b55e516247ae27b38919685b8da1543467cfd15cd92d4d4a840dc236d9dc754",
+        },
     },
 
     // Specifies the set of files and directories that are included in this package.
