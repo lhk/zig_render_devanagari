@@ -62,8 +62,8 @@ pub fn main() !void {
         defer rl.endBlendMode();
 
         // start position for the text
-        var pos_x: i32 = 100;
-        var pos_y: i32 = 100;
+        var pos_x: f32 = 100;
+        var pos_y: f32 = 100;
 
         for (glyphInfos, glyphPositions) |info, pos| {
             std.debug.print("codepoint: {d}\n", .{info.codepoint});
@@ -99,18 +99,28 @@ pub fn main() !void {
             // so I guess raylib is trying to free this buffer and if it was allocated with a different allocator, then it fails to do so
             //defer allocator.free(bitmapBuffer);
             image.data = bitmapBuffer.ptr;
+            defer rl.unloadImage(image);
 
             // to draw, we need to convert the image into a texture
             const texture: rl.Texture2D = rl.loadTextureFromImage(image);
 
-            // ToDo: the values for advance are much too high
-            // if I apply them, the textures are drawn offscreen
-            // pos_x += pos.x_advance;
-            // pos_y += pos.y_advance;
-            pos_x += 40;
-            pos_y += 0;
+            // without this line there's a memory leak. With this line the texture isn't drawn.
+            //defer rl.unloadTexture(texture);
 
-            rl.drawTexture(texture, pos_x + pos.x_offset, pos_y + pos.y_offset, rl.Color.white);
+            const x_advance = @as(f32, @floatFromInt(pos.x_advance));
+            const y_advance = @as(f32, @floatFromInt(pos.y_advance));
+            const x_offset = @as(f32, @floatFromInt(pos.x_offset));
+            const y_offset = @as(f32, @floatFromInt(pos.y_offset));
+
+            pos_x += x_advance / 64;
+            pos_y += y_advance / 64;
+
+            const draw_x: i32 = @intFromFloat(pos_x + x_offset / 64);
+            const draw_y: i32 = @intFromFloat(pos_y + y_offset / 64);
+
+            // ToDo: how do I get the bearing of the glyph?
+
+            rl.drawTexture(texture, draw_x, draw_y, rl.Color.white);
         }
     }
 }
