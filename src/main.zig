@@ -37,8 +37,9 @@ pub fn main() !void {
     defer lib.deinit();
     const ft_face = try lib.createFaceMemory(@embedFile("NotoSerifDevanagari_Condensed-Bold.ttf"), 0);
 
-    // ToDo: it's not clear to me how to set the font size correctly
-    try ft_face.setCharSize(100 * 50, 0, 50, 0);
+    // ToDo: understand these magic numbers
+    try ft_face.setCharSize(0, 5000, 9, 35);
+
     const hb_face = harfbuzz.Face.fromFreetypeFace(ft_face);
     const hb_font = harfbuzz.Font.init(hb_face);
     hb_font.shape(hb_buffer, null);
@@ -46,6 +47,9 @@ pub fn main() !void {
     // glyph infos and positions, that's what we need to render the text
     const glyphInfos = hb_buffer.getGlyphInfos();
     const glyphPositions = hb_buffer.getGlyphPositions() orelse return;
+
+    var textureHashMap = std.hash_map.AutoHashMap(u32, rl.Texture2D).init(std.heap.page_allocator);
+    defer textureHashMap.deinit();
 
     while (!rl.windowShouldClose()) {
 
@@ -62,65 +66,71 @@ pub fn main() !void {
         defer rl.endBlendMode();
 
         // start position for the text
-        var pos_x: f32 = 100;
-        var pos_y: f32 = 100;
+        const b = rl.Vector2{ .x = 100, .y = 100 };
+        var p = b;
 
         for (glyphInfos, glyphPositions) |info, pos| {
             std.debug.print("codepoint: {d}\n", .{info.codepoint});
             std.debug.print("{any}\n", .{pos});
 
             // get a bitmap for the current glyph
+            // we need the glyph for the metrics, not just for the bitmap
             try ft_face.loadGlyph(info.codepoint, .{ .render = true });
             const glyph = ft_face.glyph();
             const bm = glyph.bitmap();
             std.debug.print("bitmap: {d}x{d}\n", .{ bm.width(), bm.rows() });
 
-            // create an image from the bitmap data
-            // this block is raylib specific
-            var image: rl.Image = undefined;
-            image.width = @intCast(bm.width());
-            image.height = @intCast(bm.rows());
-            image.mipmaps = 1;
-            image.format = rl.PixelFormat.pixelformat_uncompressed_grayscale;
+            const maybeTexture = textureHashMap.get(info.codepoint);
+            var texture: rl.Texture2D = undefined;
+            if (maybeTexture == null) {
 
-            // Do I need to create this copy?
-            // using the bitmap data directly requires a @constCast(bm.buffer().?.ptr) which looks like it can't possibly be correct.
-            const buffer = bm.buffer();
-            if (buffer == null) {
-                continue;
+                // create an image from the bitmap data
+                // this block is raylib specific
+                var image: rl.Image = undefined;
+                image.width = @intCast(bm.width());
+                image.height = @intCast(bm.rows());
+                image.mipmaps = 1;
+                image.format = rl.PixelFormat.pixelformat_uncompressed_grayscale;
+
+                // Do I need to create this copy?
+                // using the bitmap data directly requires a @constCast(bm.buffer().?.ptr) which looks like it can't possibly be correct.
+                const buffer = bm.buffer();
+                if (buffer == null) {
+                    continue;
+                }
+                const bitmapBuffer = try allocator.dupe(u8, buffer.?);
+
+                // quite strange: If I uncomment this line, I get a double free error
+                // does raylib free some texture buffer itself?
+                // I'm not using raylib unloadImage or unloadTexture
+                // to me this looks like a big memory leak
+                // but: If I don't use the c_allocator, I get a "freed pointer wasn't allocated" error
+                // so I guess raylib is trying to free this buffer and if it was allocated with a different allocator, then it fails to do so
+                //defer allocator.free(bitmapBuffer);
+                image.data = bitmapBuffer.ptr;
+                defer rl.unloadImage(image);
+
+                // to draw, we need to convert the image into a texture
+                texture = rl.loadTextureFromImage(image);
+                try textureHashMap.put(info.codepoint, texture);
+            } else {
+                texture = maybeTexture.?;
             }
-            const bitmapBuffer = try allocator.dupe(u8, buffer.?);
 
-            // quite strange: If I uncomment this line, I get a double free error
-            // does raylib free some texture buffer itself?
-            // I'm not using raylib unloadImage or unloadTexture
-            // to me this looks like a big memory leak
-            // but: If I don't use the c_allocator, I get a "freed pointer wasn't allocated" error
-            // so I guess raylib is trying to free this buffer and if it was allocated with a different allocator, then it fails to do so
-            //defer allocator.free(bitmapBuffer);
-            image.data = bitmapBuffer.ptr;
-            defer rl.unloadImage(image);
+            const xa = @as(f32, @floatFromInt(pos.x_advance)) / 64;
+            const ya = @as(f32, @floatFromInt(pos.y_advance)) / 64;
+            const xo = @as(f32, @floatFromInt(pos.x_offset)) / 64;
+            const yo = @as(f32, @floatFromInt(pos.y_offset)) / 64;
 
-            // to draw, we need to convert the image into a texture
-            const texture: rl.Texture2D = rl.loadTextureFromImage(image);
+            const metrics = glyph.metrics();
+            const bearing_x = @as(f32, @floatFromInt(metrics.horiBearingX)) / 64;
+            const bearing_y = -@as(f32, @floatFromInt(metrics.horiBearingY)) / 64;
+            const x0 = p.x + xo + bearing_x;
+            const y0 = @floor(p.y + yo + bearing_y);
 
-            // without this line there's a memory leak. With this line the texture isn't drawn.
-            //defer rl.unloadTexture(texture);
-
-            const x_advance = @as(f32, @floatFromInt(pos.x_advance));
-            const y_advance = @as(f32, @floatFromInt(pos.y_advance));
-            const x_offset = @as(f32, @floatFromInt(pos.x_offset));
-            const y_offset = @as(f32, @floatFromInt(pos.y_offset));
-
-            pos_x += x_advance / 64;
-            pos_y += y_advance / 64;
-
-            const draw_x: i32 = @intFromFloat(pos_x + x_offset / 64);
-            const draw_y: i32 = @intFromFloat(pos_y + y_offset / 64);
-
-            // ToDo: how do I get the bearing of the glyph?
-
-            rl.drawTexture(texture, draw_x, draw_y, rl.Color.white);
+            const p0 = rl.Vector2{ .x = x0, .y = y0 };
+            rl.drawTextureEx(texture, b.add(p0), 0, 1, rl.Color.white);
+            p = p.add(rl.Vector2{ .x = xa, .y = ya });
         }
     }
 }
